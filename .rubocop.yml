@@ -1,0 +1,28 @@
+AllCops:
+  TargetRubyVersion: 3.1
+  NewCops: enable
+  SuggestExtensions: false
+
+# A small, well-documented middleware gem — module/class comments live where
+# they add value, not as a blanket requirement.
+Style/Documentation:
+  Enabled: false
+
+Layout/LineLength:
+  Max: 120
+
+Metrics/MethodLength:
+  Max: 25
+
+Metrics/AbcSize:
+  Max: 25
+
+# Specs and the gemspec legitimately use long blocks.
+Metrics/BlockLength:
+  Exclude:
+    - 'spec/**/*'
+    - '*.gemspec'
+
+# Dev dependencies live in the gemspec for this gem, not the Gemfile.
+Gemspec/DevelopmentDependencies:
+  Enabled: false

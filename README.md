@@ -270,8 +270,10 @@ key is stored in the repository or on a maintainer's machine.
    `tag:` in their `Gemfile` and re-resolve:
    `bundle update cloudflare_access_gate`.
 
-`rake release` is deliberately not used: it pushes a commit straight to `main`,
-which branch protection rejects.
+Don't run `rake release` yourself: it pushes the release commit and tag straight
+to `main`, which branch protection rejects. The workflow does invoke it, but
+because the tag already exists when it runs, Bundler skips its source-control
+push and goes straight to publishing.
 
 ## License
 

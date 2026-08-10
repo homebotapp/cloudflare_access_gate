@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-09
+
+First release published to RubyGems. The library is unchanged from 0.2.0 — that
+version was tagged in the repository but never pushed to rubygems.org, so 0.2.1
+is the first version installable with `gem install cloudflare_access_gate`.
+
+### Added
+- A `Release` workflow that builds the gem and publishes it to RubyGems via
+  [trusted publishing](https://guides.rubygems.org/trusted-publishing/) whenever
+  a `v*` tag is pushed, so a release needs no long-lived API key on anyone's
+  machine. It refuses to publish when the tag and `VERSION` disagree, since a
+  yanked version number can never be re-pushed.
+
 ## [0.2.0] - 2026-08-05
 
 Public-release preparation on top of 0.1.1. Everything 0.1.1 added is kept: the

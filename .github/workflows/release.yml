@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # mint the OIDC token for trusted publishing
+
+jobs:
+  release:
+    name: publish to RubyGems
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+
+      # A tag that disagrees with version.rb would publish a version number
+      # nobody can take back: RubyGems never allows a yanked version to be
+      # re-pushed. Cheaper to fail here than to burn a version.
+      - name: Verify the tag matches the gem version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          gem_version="$(ruby -Ilib -r cloudflare_access_gate/version -e 'print CloudflareAccessGate::VERSION')"
+          if [ "$tag_version" != "$gem_version" ]; then
+            echo "Tag ${GITHUB_REF_NAME} implies ${tag_version}, but VERSION is ${gem_version}" >&2
+            exit 1
+          fi
+
+      # Builds the gem, pushes it to RubyGems over OIDC (no API key), and
+      # creates the GitHub Release for the tag.
+      - name: Build, publish, and release
+        uses: rubygems/release-gem@052cc82692552de3ef2b81fd670e41d13cba8092 # v1.4.0

@@ -32,7 +32,7 @@ Or straight from git, pinned to a tag:
 
 ```ruby
 gem 'cloudflare_access_gate', github: 'homebotapp/cloudflare_access_gate',
-    tag: 'v0.2.0'
+    tag: 'v0.2.1'
 ```
 
 ## Usage
@@ -251,12 +251,29 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Releasing
 
-1. Bump `CloudflareAccessGate::VERSION` in `lib/cloudflare_access_gate/version.rb`.
-2. Add a `CHANGELOG.md` entry for the new version.
-3. Commit, then create and push an annotated tag:
+`.github/workflows/release.yml` publishes to RubyGems over
+[trusted publishing](https://guides.rubygems.org/trusted-publishing/), so no API
+key is stored in the repository or on a maintainer's machine.
+
+1. Open a PR bumping `CloudflareAccessGate::VERSION` in
+   `lib/cloudflare_access_gate/version.rb`, updating the version assertion in
+   `spec/cloudflare_access_gate_spec.rb`, and adding a `CHANGELOG.md` entry.
+   `main` is protected, so this can't be pushed directly.
+2. Merge it once CI is green.
+3. Create and push an annotated tag on the merge commit:
    `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`.
-4. For consumers pinned by git ref, update the `tag:` in their `Gemfile` and
-   re-resolve the locked revision: `bundle update cloudflare_access_gate`.
+4. The Release workflow verifies the tag matches `VERSION`, builds the gem,
+   pushes it to RubyGems, and creates the GitHub Release. A mismatch fails the
+   job before anything is published — a yanked version number can never be
+   reused.
+5. For consumers pinned by git ref rather than the published gem, update the
+   `tag:` in their `Gemfile` and re-resolve:
+   `bundle update cloudflare_access_gate`.
+
+Don't run `rake release` yourself: it pushes the release commit and tag straight
+to `main`, which branch protection rejects. The workflow does invoke it, but
+because the tag already exists when it runs, Bundler skips its source-control
+push and goes straight to publishing.
 
 ## License
 

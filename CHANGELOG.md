@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-14
+
+Lets a host app use the verified Access identity, not just the gate's
+pass/deny. Everything 0.2.1 verified is verified the same way; the gate's
+behavior and ENV contract are unchanged.
+
+### Added
+
+- `CloudflareAccessGate::Verifier`, extracted from `Gate`. `#verify(token)`
+  returns the claims of a fully verified token (signature against the team
+  JWKS, issuer, audience, expiry, required claims) or `nil`, with the same
+  fail-closed rules the gate applies: a blank audience or team domain, an
+  unavailable JWKS, or any decode failure yields `nil`. The JWKS cache lives on
+  the instance, so hold one verifier per audience for the life of the process.
+- `Gate` exposes the verified token's claims to the app behind it as
+  `env['cloudflare_access.claims']` (`Gate::CLAIMS_ENV_KEY`). The key is absent
+  when JWT validation is disabled, since nothing about the token was checked.
+- `verifier:` option on `Gate`, forwarded by `.protect`, so a host app can share
+  one `Verifier` (and its JWKS cache) between the gate and its own login code.
+
+### Changed
+
+- `Gate#audience` and `#team_domain` now read from its verifier.
+  `Gate::DEFAULT_LEEWAY` and `Gate::REQUIRED_CLAIMS` remain as aliases of the
+  `Verifier` constants.
+
 ## [0.2.1] - 2026-08-09
 
 First release published to RubyGems. The library is unchanged from 0.2.0 — that

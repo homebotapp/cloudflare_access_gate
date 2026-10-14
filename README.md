@@ -10,11 +10,16 @@ logging library required. It works on **Rack 2 and Rack 3**, and it doesn't even
 require `rack` itself: it calls no Rack APIs, only the SPEC's `call(env)`
 contract.
 
-It ships two plain-Rack middlewares and one Rails installer helper:
+It ships two plain-Rack middlewares, a token verifier, and one Rails installer
+helper:
 
 - `CloudflareAccessGate::Gate` — validates the `Cf-Access-Jwt-Assertion` header
   (injected by the Cloudflare Access application in front of your host) against
-  your Access team's JWKS, issuer, and audience. **Fails closed.**
+  your Access team's JWKS, issuer, and audience. **Fails closed.** Exposes the
+  verified claims as `env['cloudflare_access.claims']`.
+- `CloudflareAccessGate::Verifier` — the verification behind `Gate`, usable on
+  its own: `#verify(token)` returns the claims of a fully verified token or
+  `nil`, so a host app can log a user in by the token's `email` claim.
 - `CloudflareAccessGate::AuditLogger` — logs `method` / `path` / `user` /
   `status` for GET, POST, PUT, PATCH, and DELETE dashboard requests, in an
   `ensure` so the record is emitted even if the request raises.
@@ -108,6 +113,36 @@ use CloudflareAccessGate::Gate, audience: ENV['CLOUDFLARE_ACCESS_AUD']
 use CloudflareAccessGate::AuditLogger
 ```
 
+### Using the verified identity
+
+Behind the gate, the app receives the verified token's claims as
+`env['cloudflare_access.claims']` (absent when JWT validation is off). To
+establish identity without the gate's 403 — for example, to log an admin in by
+email when the token is present and fall back to a login form when it is not —
+use `Verifier` directly:
+
+```ruby
+# Hold one verifier per audience for the life of the process: the JWKS cache
+# (TTL, error backoff, staleness grace) lives on the instance.
+VERIFIER = CloudflareAccessGate::Verifier.new(audience: ENV['CLOUDFLARE_ACCESS_APP_AUD'])
+
+claims = VERIFIER.verify(request.env['HTTP_CF_ACCESS_JWT_ASSERTION'])
+if claims
+  user = User.find_by(email: claims['email'])
+  # ...
+end
+```
+
+Only the claims of a fully verified token are returned; a blank audience or
+team domain, an unavailable JWKS, or any signature, issuer, audience, or expiry
+failure yields `nil`. Take the identity from the verified `email` claim, never
+from the `Cf-Access-Authenticated-User-Email` header, which anything that can
+reach your origin can set.
+
+To share one verifier (and JWKS cache) between the gate and your own code,
+pass it in: `CloudflareAccessGate.protect(app, verifier: VERIFIER, audience: nil, session_key: '…')`
+or `use CloudflareAccessGate::Gate, verifier: VERIFIER`.
+
 ## Configuration
 
 ### ENV contract
@@ -123,11 +158,14 @@ use CloudflareAccessGate::AuditLogger
 
 | Option | Default | Meaning |
 | --- | --- | --- |
+| `verifier:` | _(built from the options below)_ | A `Verifier` to share with the host app. When given, the other options are ignored in favour of its configuration. |
 | `audience:` | _(none)_ | The Access application AUD tag. A blank audience denies every request rather than skipping audience verification. |
 | `team_domain:` | `ENV['CLOUDFLARE_ACCESS_TEAM_DOMAIN']` | Access team slug. |
 | `leeway:` | `60` | Clock-drift allowance in seconds for `exp`/`nbf`, matching the 60s Cloudflare itself allows. |
 | `jwks_stale_grace:` | `300` | How long a previously-good JWKS may still be used when a refresh fails. `0` denies as soon as the cache expires. |
 | `logger:` | _(global)_ | Per-instance logger override. |
+
+`Verifier.new` takes the same options except `verifier:`.
 
 ### AuditLogger options
 

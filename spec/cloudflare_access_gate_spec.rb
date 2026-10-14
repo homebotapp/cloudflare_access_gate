@@ -4,7 +4,7 @@ require 'spec_helper'
 
 RSpec.describe CloudflareAccessGate do
   it 'has a version number' do
-    expect(CloudflareAccessGate::VERSION).to eq('0.2.1')
+    expect(CloudflareAccessGate::VERSION).to eq('0.3.0')
   end
 
   describe '.protect' do

@@ -115,6 +115,12 @@ RSpec.describe CloudflareAccessGate::Gate do
       status, = middleware.call(env)
       expect(status).to eq(200)
     end
+
+    it 'exposes no claims, since nothing about the token was checked' do
+      env['HTTP_CF_ACCESS_JWT_ASSERTION'] = 'any-token-value'
+      middleware.call(env)
+      expect(env).not_to have_key(described_class::CLAIMS_ENV_KEY)
+    end
   end
 
   context 'when gate is enabled with JWT validation' do
@@ -175,6 +181,32 @@ RSpec.describe CloudflareAccessGate::Gate do
       env['HTTP_CF_ACCESS_JWT_ASSERTION'] = valid_token
       status, = middleware.call(env)
       expect(status).to eq(200)
+    end
+
+    it 'exposes the verified claims to the app under cloudflare_access.claims' do
+      seen = nil
+      inner = lambda do |e|
+        seen = e[described_class::CLAIMS_ENV_KEY]
+        [200, {}, ['OK']]
+      end
+      gate = described_class.new(inner, audience: audience, team_domain: team_domain)
+      env['HTTP_CF_ACCESS_JWT_ASSERTION'] = signed_token(email: 'admin@example.com')
+
+      gate.call(env)
+
+      expect(seen).to include('email' => 'admin@example.com', 'aud' => [audience])
+    end
+
+    it 'uses a verifier passed in instead of building its own' do
+      shared = CloudflareAccessGate::Verifier.new(audience: audience, team_domain: team_domain)
+      gate = described_class.new(inner_app, verifier: shared, audience: 'ignored')
+      env['HTTP_CF_ACCESS_JWT_ASSERTION'] = valid_token
+
+      status, = gate.call(env)
+
+      expect(status).to eq(200)
+      expect(gate.verifier).to be(shared)
+      expect(gate.audience).to eq(audience)
     end
 
     describe 'required claims' do

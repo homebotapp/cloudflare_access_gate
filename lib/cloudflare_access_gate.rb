@@ -3,6 +3,7 @@
 require 'cloudflare_access_gate/version'
 require 'cloudflare_access_gate/structured_logger'
 require 'cloudflare_access_gate/jwks_cache'
+require 'cloudflare_access_gate/verifier'
 require 'cloudflare_access_gate/gate'
 require 'cloudflare_access_gate/audit_logger'
 

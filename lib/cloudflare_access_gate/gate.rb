@@ -1,13 +1,12 @@
 # frozen_string_literal: true
 
-require 'jwt'
-
 module CloudflareAccessGate
   # Rack middleware that gates a dashboard (typically Sidekiq::Web) behind
   # Cloudflare Access. It reads the `Cf-Access-Jwt-Assertion` header injected by
   # the Cloudflare Access application in front of the host and, when JWT
-  # validation is enabled, verifies the token's signature (against the team's
-  # JWKS), issuer, audience, and expiry before letting the request through.
+  # validation is enabled, verifies the token (see `Verifier`) before letting
+  # the request through. The verified claims are exposed to the app as
+  # `env['cloudflare_access.claims']`.
   #
   # Everything is fail-closed: the gate stays on and rejects requests unless a
   # flag is explicitly set to the string 'false', and a missing audience, missing
@@ -22,14 +21,13 @@ module CloudflareAccessGate
   # This class is plain Rack: no Rails, ActiveSupport, or logging library is
   # required at runtime.
   class Gate
-    # Clock drift allowance for exp/nbf, matching the 60s Cloudflare itself
-    # allows when validating tokens. (`iat` is not verified: ruby-jwt leaves
-    # verify_iat off by default and its iat check ignores this leeway.)
-    DEFAULT_LEEWAY = 60 # seconds
+    DEFAULT_LEEWAY = Verifier::DEFAULT_LEEWAY
+    REQUIRED_CLAIMS = Verifier::REQUIRED_CLAIMS
 
-    # `verify_*` options only check a claim when it is present, so a correctly
-    # signed token that simply omits `exp` would otherwise never expire.
-    REQUIRED_CLAIMS = %w[exp iss aud].freeze
+    # Rack env key under which the verified token's claims are stored for the
+    # app behind the gate. Absent when JWT validation is disabled, since then
+    # nothing about the token has been checked.
+    CLAIMS_ENV_KEY = 'cloudflare_access.claims'
 
     FORBIDDEN_BODY = 'Forbidden'
 
@@ -43,9 +41,13 @@ module CloudflareAccessGate
       'content-length' => FORBIDDEN_BODY.bytesize.to_s
     }.freeze
 
-    attr_reader :audience, :team_domain
+    VERIFIER_OPTIONS = %i[audience team_domain leeway jwks_stale_grace logger clock].freeze
+
+    attr_reader :verifier
 
     # Options:
+    #   verifier:         a Verifier to share with the host app; when given, the
+    #                     options below are ignored in favour of its configuration
     #   audience:         (required in practice) the Access application AUD tag
     #   team_domain:      Access team slug; defaults to ENV
     #   leeway:           clock drift allowance in seconds
@@ -54,15 +56,8 @@ module CloudflareAccessGate
     #   clock:            callable returning monotonic seconds (for tests)
     def initialize(app, options = {})
       @app = app
-      @audience = options[:audience]
-      @team_domain = options.fetch(:team_domain) { ENV.fetch('CLOUDFLARE_ACCESS_TEAM_DOMAIN', nil) }
-      @leeway = options.fetch(:leeway, DEFAULT_LEEWAY)
       @logger = options[:logger] && StructuredLogger.wrap(options[:logger])
-      @jwks_cache_mutex = Mutex.new
-      @jwks_options = {
-        stale_grace: options.fetch(:jwks_stale_grace, JwksCache::DEFAULT_STALE_GRACE),
-        clock: options.fetch(:clock, JwksCache::MONOTONIC_CLOCK)
-      }
+      @verifier = options.fetch(:verifier) { Verifier.new(**options.slice(*VERIFIER_OPTIONS)) }
     end
 
     def call(env)
@@ -71,7 +66,12 @@ module CloudflareAccessGate
       token = env['HTTP_CF_ACCESS_JWT_ASSERTION']
       return forbidden('Missing access token', env) if blank?(token)
 
-      return forbidden('Invalid access token', env) unless token_acceptable?(token)
+      if self.class.jwt_validation_enabled?
+        claims = verifier.verify(token)
+        return forbidden('Invalid access token', env) unless claims
+
+        env[CLAIMS_ENV_KEY] = claims
+      end
 
       @app.call(env)
     end
@@ -86,81 +86,15 @@ module CloudflareAccessGate
       ENV.fetch('ENABLE_CLOUDFLARE_JWT_VALIDATION', 'true') != 'false'
     end
 
+    def audience
+      verifier.audience
+    end
+
+    def team_domain
+      verifier.team_domain
+    end
+
     private
-
-    # When JWT validation is switched off, the presence of the header (already
-    # checked by the caller) is all that is required.
-    def token_acceptable?(token)
-      return true unless self.class.jwt_validation_enabled?
-
-      !verify_token(token).nil?
-    end
-
-    # Returns the decoded payload, or nil if the token must be rejected.
-    def verify_token(token)
-      return nil unless verifiable?
-
-      jwks = jwks_cache.fetch
-      return nil unless jwks
-
-      decode(token, jwks)
-    rescue JWT::DecodeError => e
-      logger.warn('Cloudflare Access JWT verification failed', error: e.message, error_class: e.class.name)
-      nil
-    end
-
-    def decode(token, jwks)
-      JWT.decode(
-        token,
-        nil,
-        true,
-        algorithms: ['RS256'],
-        jwks: jwks,
-        aud: audience,
-        verify_aud: true,
-        iss: issuer,
-        verify_iss: true,
-        verify_expiration: true,
-        required_claims: REQUIRED_CLAIMS,
-        leeway: @leeway
-      ).first
-    end
-
-    # Both of these must be configured for verification to mean anything, so a
-    # blank value denies rather than silently skipping a check.
-    def verifiable?
-      # A nil/blank audience makes the jwt gem skip aud verification, which would
-      # let any valid Cloudflare Access JWT (from any app) through.
-      if blank?(audience)
-        logger.error('Cloudflare Access JWT not verified: audience not configured')
-        return false
-      end
-
-      # The issuer and the JWKS URL are both derived from the team domain.
-      if blank?(team_domain)
-        logger.error('Cloudflare Access JWT not verified: CLOUDFLARE_ACCESS_TEAM_DOMAIN unset')
-        return false
-      end
-
-      true
-    end
-
-    def issuer
-      "https://#{team_domain}.cloudflareaccess.com"
-    end
-
-    # Synchronized: JwksCache guards its own fetches, but an unsynchronized
-    # `||=` here lets concurrent cold-start requests each build their own cache
-    # and each run a separate fetch, which is what the backoff exists to prevent.
-    def jwks_cache
-      @jwks_cache_mutex.synchronize do
-        @jwks_cache ||= JwksCache.new(
-          certs_url: "#{issuer}/cdn-cgi/access/certs",
-          logger: logger,
-          **@jwks_options
-        )
-      end
-    end
 
     def forbidden(message, env)
       logger.warn('Cloudflare Access gate denied request',
